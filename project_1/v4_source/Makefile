@@ -11,15 +11,15 @@ v4_seq:
 v4_omp: 
 	$(CC) $(CFLAGS) -o v4_omp v4_omp.c mmio.c -fopenmp
 
-v4_threads:
-	$(CC) $(CFLAGS) -o v4_threads v4_threads.c mmio.c -lpthread
+v4_pthreads:
+	$(CC) $(CFLAGS) -o v4_pthreads v4_pthreads.c mmio.c -lpthread
 
 v4_cilk:
-	$(CILKCC) $(CFLAGS) -o v4_cilk v4_cilk.c -fcilkplus
+	$(CILKCC) $(CFLAGS) -o v4_cilk v4_cilk.c mmio.c -fcilkplus
 
 .PHONY: clean
 
-all: v4_seq v4_omp v4_cilk v4_threads
+all: v4_seq v4_omp v4_cilk v4_pthreads
 
 clean:
-	rm -f v4_seq v4_omp v4_cilk v4_threads
+	rm -f v4_seq v4_omp v4_cilk v4_pthreads

@@ -1,13 +1,21 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h> 
-#include <unistd.h>
 #include <time.h>
 #include "mmio.h"
 
-#include <cilk/cilk.h>
+#include <pthread.h>
+
+struct data{
+    uint32_t* col;
+    uint32_t* row;
+    uint32_t* values;
+    uint32_t start;
+    uint32_t stop;
+};
 
 uint32_t commonElements(uint32_t* A, uint32_t* B, uint32_t size_A, uint32_t size_B);
+void* multiplication(void* arg);
 
 void coo2csc(
   uint32_t       * const row,       /*!< CSC row start indices */
@@ -28,8 +36,8 @@ int main(int argc, char* argv[]){
     uint32_t i, *I, *J;
     double *val;
 
-    if (argc < 2){
-		fprintf(stderr, "Usage: %s [martix-market-filename]\n", argv[0]);
+    if (argc < 3){
+		fprintf(stderr, "Usage: %s [martix-market-filename] [number-of-threads]\n", argv[0]);
 		exit(1);
 	}
     else{
@@ -127,44 +135,42 @@ int main(int argc, char* argv[]){
     // Array that stores the # of triangles a node belongs
     uint32_t *c3 = (uint32_t*)calloc(n, sizeof(uint32_t));
 
+    // Initialize threads and # of threads
+    int num_threads = atoi(argv[2]);
+    pthread_t thread[num_threads];
+
+    // Initialize the values of the struct
+    uint32_t start = 0;
+    uint32_t stop = 0;
+    // Distribute the tasks among the threads
+    uint32_t tasks_per_thread = (n+num_threads-1)/num_threads;
+    // Make the struct that the threads use
+    struct data td[num_threads];
+
     struct timespec begin, end;
 
     // Starting the clock
     clock_gettime(CLOCK_REALTIME, &begin);
+
+    // Divide work for threads, prepare parameters
+    for (uint32_t i=0; i<num_threads; i++){
+        td[i].start = i*tasks_per_thread;
+        td[i].stop = (i+1)*tasks_per_thread;
+        td[i].col = col;
+        td[i].row = row;
+        td[i].values = values;
+    }
+    // last calculation must not go past the end of the array
+    td[num_threads-1].stop = n;
+
+    // Create the threads
+    for (uint32_t i=0; i<num_threads; i++) {
+        pthread_create(&thread[i], NULL, multiplication, &td[i]);
+    }
     
-    cilk_for (uint32_t i=0; i<n; i++){
-
-        // Array that contains the rows in column i that exist
-        uint32_t col_i_size = col[i+1]-col[i];
-        uint32_t *col_i = (uint32_t*)calloc(col_i_size, sizeof(uint32_t));
-        
-        for (uint32_t l=0; l<col_i_size; l++){
-            col_i[l] = row[col[i]+l];
-        }
-
-
-        /*
-            Runs for every element in column i that exists.
-            In this way I mask the elements in the A*A matrix that have
-            to become zero due to the Hadamard product.
-            Since the matrix A is symmetrical the row j == col j
-        */
-        for (uint32_t j=0; j<col_i_size; j++){
-
-            // Array that contain the rows in column j that exist
-            uint32_t col_j_size = col[col_i[j]+1]-col[col_i[j]];
-            uint32_t *col_j = (uint32_t*)calloc(col_j_size,sizeof(uint32_t));
-
-            for (uint32_t l=0; l<col_j_size; l++){
-                col_j[l] = row[col[col_i[j]]+l];
-            }
-
-            // Find the number of common elements in column i and column j
-            values[col[i]+j] = commonElements(col_i, col_j, col_i_size, col_j_size);
-
-            free ( col_j );
-        }
-        free ( col_i );
+    // Wait for the threads to finish
+    for (uint32_t i=0; i<num_threads; i++) {
+        pthread_join(thread[i], NULL);
     }
 
     // This is the multiplication with the vector of size n and elements 1
@@ -225,6 +231,53 @@ uint32_t commonElements(uint32_t* A, uint32_t* B, uint32_t size_A, uint32_t size
             j++;
     }
     return common;
+}
+
+// The function used by the pthread
+void* multiplication(void* arg){
+    struct data* data = (struct data*) arg;
+    uint32_t start = data->start;
+    uint32_t stop = data->stop;
+    uint32_t* col = data->col;
+    uint32_t* row = data->row;
+    uint32_t* values = data->values;
+
+    for (uint32_t i=start; i<stop; i++){
+
+        // Array that contains the rows in column i that exist
+        uint32_t col_i_size = col[i+1]-col[i];
+        uint32_t *col_i = (uint32_t*)calloc(col_i_size, sizeof(uint32_t));
+        
+        for (uint32_t l=0; l<col_i_size; l++){
+            col_i[l] = row[col[i]+l];
+        }
+
+
+        /*
+            Runs for every element in column i that exists.
+            In this way I mask the elements in the A*A matrix that have
+            to become zero due to the Hadamard product.
+            Since the matrix A is symmetrical the row j == col j
+        */
+        for (uint32_t j=0; j<col_i_size; j++){
+
+            // Array that contain the rows in column j that exist
+            uint32_t col_j_size = col[col_i[j]+1]-col[col_i[j]];
+            uint32_t *col_j = (uint32_t*)calloc(col_j_size,sizeof(uint32_t));
+
+            for (uint32_t l=0; l<col_j_size; l++){
+                col_j[l] = row[col[col_i[j]]+l];
+            }
+
+            // Find the number of common elements in column i and column j
+            values[col[i]+j] = commonElements(col_i, col_j, col_i_size, col_j_size);
+            
+            free ( col_j );
+        }
+
+        free ( col_i );
+    }
+    return NULL;
 }
 
 
